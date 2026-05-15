@@ -1,0 +1,554 @@
+import os
+from enum import Enum
+from typing import List, Tuple, Optional, Set
+from dataclasses import dataclass
+from copy import deepcopy
+
+class PieceType(Enum):
+    PAWN = 1
+    KNIGHT = 2
+    BISHOP = 3
+    ROOK = 4
+    QUEEN = 5
+    KING = 6
+
+class Color(Enum):
+    WHITE = 1
+    BLACK = 2
+
+@dataclass
+class Piece:
+    piece_type: PieceType
+    color: Color
+    
+    def __str__(self):
+        symbols = {
+            (PieceType.PAWN, Color.WHITE): '♟',
+            (PieceType.PAWN, Color.BLACK): '♙',
+            (PieceType.KNIGHT, Color.WHITE): '♞',
+            (PieceType.KNIGHT, Color.BLACK): '♘',
+            (PieceType.BISHOP, Color.WHITE): '♝',
+            (PieceType.BISHOP, Color.BLACK): '♗',
+            (PieceType.ROOK, Color.WHITE): '♜',
+            (PieceType.ROOK, Color.BLACK): '♖',
+            (PieceType.QUEEN, Color.WHITE): '♛',
+            (PieceType.QUEEN, Color.BLACK): '♕',
+            (PieceType.KING, Color.WHITE): '♚',
+            (PieceType.KING, Color.BLACK): '♔',
+        }
+        return symbols.get((self.piece_type, self.color), '?')
+
+class ChessBoard:
+    def __init__(self):
+        self.board: List[List[Optional[Piece]]] = [[None for _ in range(8)] for _ in range(8)]
+        self.white_king_pos = (7, 4)
+        self.black_king_pos = (0, 4)
+        self.white_castling_kingside = True
+        self.white_castling_queenside = True
+        self.black_castling_kingside = True
+        self.black_castling_queenside = True
+        self.en_passant_target = None
+        self.halfmove_clock = 0
+        self.fullmove_number = 1
+        self.setup_board()
+    
+    def setup_board(self):
+        """Initialize the board with standard chess starting position."""
+        # Setup black pieces
+        self.board[0][0] = Piece(PieceType.ROOK, Color.BLACK)
+        self.board[0][1] = Piece(PieceType.KNIGHT, Color.BLACK)
+        self.board[0][2] = Piece(PieceType.BISHOP, Color.BLACK)
+        self.board[0][3] = Piece(PieceType.QUEEN, Color.BLACK)
+        self.board[0][4] = Piece(PieceType.KING, Color.BLACK)
+        self.board[0][5] = Piece(PieceType.BISHOP, Color.BLACK)
+        self.board[0][6] = Piece(PieceType.KNIGHT, Color.BLACK)
+        self.board[0][7] = Piece(PieceType.ROOK, Color.BLACK)
+        
+        for col in range(8):
+            self.board[1][col] = Piece(PieceType.PAWN, Color.BLACK)
+        
+        # Setup white pieces
+        for col in range(8):
+            self.board[6][col] = Piece(PieceType.PAWN, Color.WHITE)
+        
+        self.board[7][0] = Piece(PieceType.ROOK, Color.WHITE)
+        self.board[7][1] = Piece(PieceType.KNIGHT, Color.WHITE)
+        self.board[7][2] = Piece(PieceType.BISHOP, Color.WHITE)
+        self.board[7][3] = Piece(PieceType.QUEEN, Color.WHITE)
+        self.board[7][4] = Piece(PieceType.KING, Color.WHITE)
+        self.board[7][5] = Piece(PieceType.BISHOP, Color.WHITE)
+        self.board[7][6] = Piece(PieceType.KNIGHT, Color.WHITE)
+        self.board[7][7] = Piece(PieceType.ROOK, Color.WHITE)
+    
+    def display(self):
+        """Display the current board state."""
+        os.system('clear' if os.name == 'posix' else 'cls')
+        print("\n  a b c d e f g h")
+        print("  ───────────────")
+        for row in range(8):
+            print(f"{8 - row}│", end="")
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece:
+                    print(f"{piece} ", end="")
+                else:
+                    print("· ", end="")
+            print(f"│{8 - row}")
+        print("  ───────────────")
+        print("  a b c d e f g h\n")
+    
+    def pos_to_coords(self, pos: str) -> Tuple[int, int]:
+        """Convert chess notation (e.g., 'e2') to board coordinates."""
+        col = ord(pos[0]) - ord('a')
+        row = 8 - int(pos[1])
+        return (row, col)
+    
+    def coords_to_pos(self, row: int, col: int) -> str:
+        """Convert board coordinates to chess notation."""
+        return chr(col + ord('a')) + str(8 - row)
+    
+    def get_piece(self, row: int, col: int) -> Optional[Piece]:
+        """Get piece at position."""
+        if 0 <= row < 8 and 0 <= col < 8:
+            return self.board[row][col]
+        return None
+    
+    def is_valid_pos(self, row: int, col: int) -> bool:
+        """Check if position is on the board."""
+        return 0 <= row < 8 and 0 <= col < 8
+    
+    def get_legal_moves(self, row: int, col: int) -> Set[Tuple[int, int]]:
+        """Get all legal moves for a piece at given position."""
+        piece = self.get_piece(row, col)
+        if not piece:
+            return set()
+        
+        moves = self._get_pseudo_legal_moves(row, col)
+        legal_moves = set()
+        
+        for target_row, target_col in moves:
+            if self._is_legal_move(row, col, target_row, target_col):
+                legal_moves.add((target_row, target_col))
+        
+        return legal_moves
+    
+    def _get_pseudo_legal_moves(self, row: int, col: int) -> Set[Tuple[int, int]]:
+        """Get pseudo-legal moves (not checking for check)."""
+        piece = self.get_piece(row, col)
+        if not piece:
+            return set()
+        
+        moves = set()
+        
+        if piece.piece_type == PieceType.PAWN:
+            moves = self._get_pawn_moves(row, col, piece.color)
+        elif piece.piece_type == PieceType.KNIGHT:
+            moves = self._get_knight_moves(row, col, piece.color)
+        elif piece.piece_type == PieceType.BISHOP:
+            moves = self._get_bishop_moves(row, col, piece.color)
+        elif piece.piece_type == PieceType.ROOK:
+            moves = self._get_rook_moves(row, col, piece.color)
+        elif piece.piece_type == PieceType.QUEEN:
+            moves = self._get_queen_moves(row, col, piece.color)
+        elif piece.piece_type == PieceType.KING:
+            moves = self._get_king_moves(row, col, piece.color)
+        
+        return moves
+    
+    def _get_pawn_moves(self, row: int, col: int, color: Color) -> Set[Tuple[int, int]]:
+        """Get possible pawn moves."""
+        moves = set()
+        direction = 1 if color == Color.BLACK else -1
+        start_row = 1 if color == Color.BLACK else 6
+        
+        # Forward move
+        new_row = row + direction
+        if self.is_valid_pos(new_row, col) and self.board[new_row][col] is None:
+            moves.add((new_row, col))
+            
+            # Double move from starting position
+            if row == start_row:
+                new_row2 = row + 2 * direction
+                if self.board[new_row2][col] is None:
+                    moves.add((new_row2, col))
+        
+        # Captures
+        for dcol in [-1, 1]:
+            new_col = col + dcol
+            new_row = row + direction
+            if self.is_valid_pos(new_row, new_col):
+                target = self.board[new_row][new_col]
+                if target and target.color != color:
+                    moves.add((new_row, new_col))
+                # En passant
+                elif (new_row, new_col) == self.en_passant_target:
+                    moves.add((new_row, new_col))
+        
+        return moves
+    
+    def _get_knight_moves(self, row: int, col: int, color: Color) -> Set[Tuple[int, int]]:
+        """Get possible knight moves."""
+        moves = set()
+        knight_moves = [(-2, -1), (-2, 1), (-1, -2), (-1, 2),
+                       (1, -2), (1, 2), (2, -1), (2, 1)]
+        
+        for drow, dcol in knight_moves:
+            new_row, new_col = row + drow, col + dcol
+            if self.is_valid_pos(new_row, new_col):
+                target = self.board[new_row][new_col]
+                if target is None or target.color != color:
+                    moves.add((new_row, new_col))
+        
+        return moves
+    
+    def _get_sliding_moves(self, row: int, col: int, color: Color, directions: List[Tuple[int, int]]) -> Set[Tuple[int, int]]:
+        """Get moves for sliding pieces (bishop, rook, queen)."""
+        moves = set()
+        
+        for drow, dcol in directions:
+            new_row, new_col = row + drow, col + dcol
+            while self.is_valid_pos(new_row, new_col):
+                target = self.board[new_row][new_col]
+                if target is None:
+                    moves.add((new_row, new_col))
+                else:
+                    if target.color != color:
+                        moves.add((new_row, new_col))
+                    break
+                new_row += drow
+                new_col += dcol
+        
+        return moves
+    
+    def _get_bishop_moves(self, row: int, col: int, color: Color) -> Set[Tuple[int, int]]:
+        """Get possible bishop moves."""
+        directions = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
+        return self._get_sliding_moves(row, col, color, directions)
+    
+    def _get_rook_moves(self, row: int, col: int, color: Color) -> Set[Tuple[int, int]]:
+        """Get possible rook moves."""
+        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        return self._get_sliding_moves(row, col, color, directions)
+    
+    def _get_queen_moves(self, row: int, col: int, color: Color) -> Set[Tuple[int, int]]:
+        """Get possible queen moves."""
+        directions = [(-1, -1), (-1, 0), (-1, 1), (0, -1),
+                     (0, 1), (1, -1), (1, 0), (1, 1)]
+        return self._get_sliding_moves(row, col, color, directions)
+    
+    def _get_king_moves(self, row: int, col: int, color: Color) -> Set[Tuple[int, int]]:
+        """Get possible king moves including castling."""
+        moves = set()
+        
+        # Regular king moves
+        for drow in [-1, 0, 1]:
+            for dcol in [-1, 0, 1]:
+                if drow == 0 and dcol == 0:
+                    continue
+                new_row, new_col = row + drow, col + dcol
+                if self.is_valid_pos(new_row, new_col):
+                    target = self.board[new_row][new_col]
+                    if target is None or target.color != color:
+                        moves.add((new_row, new_col))
+        
+        # Castling
+        if color == Color.WHITE:
+            if self.white_castling_kingside and self._can_castle_kingside(Color.WHITE):
+                moves.add((7, 6))
+            if self.white_castling_queenside and self._can_castle_queenside(Color.WHITE):
+                moves.add((7, 2))
+        else:
+            if self.black_castling_kingside and self._can_castle_kingside(Color.BLACK):
+                moves.add((0, 6))
+            if self.black_castling_queenside and self._can_castle_queenside(Color.BLACK):
+                moves.add((0, 2))
+        
+        return moves
+    
+    def _can_castle_kingside(self, color: Color) -> bool:
+        """Check if kingside castling is possible."""
+        if color == Color.WHITE:
+            king_row = 7
+            king_col = 4
+            rook_col = 7
+        else:
+            king_row = 0
+            king_col = 4
+            rook_col = 7
+        
+        # Check if king and rook are in correct positions
+        if not isinstance(self.board[king_row][king_col], Piece) or self.board[king_row][king_col].piece_type != PieceType.KING:
+            return False
+        if not isinstance(self.board[king_row][rook_col], Piece) or self.board[king_row][rook_col].piece_type != PieceType.ROOK:
+            return False
+        
+        # Check if squares between are empty
+        for col in range(king_col + 1, rook_col):
+            if self.board[king_row][col] is not None:
+                return False
+        
+        # Check if king is in check or passes through check
+        if self._is_square_attacked(king_row, king_col, color):
+            return False
+        if self._is_square_attacked(king_row, king_col + 1, color):
+            return False
+        
+        return True
+    
+    def _can_castle_queenside(self, color: Color) -> bool:
+        """Check if queenside castling is possible."""
+        if color == Color.WHITE:
+            king_row = 7
+            king_col = 4
+            rook_col = 0
+        else:
+            king_row = 0
+            king_col = 4
+            rook_col = 0
+        
+        # Check if king and rook are in correct positions
+        if not isinstance(self.board[king_row][king_col], Piece) or self.board[king_row][king_col].piece_type != PieceType.KING:
+            return False
+        if not isinstance(self.board[king_row][rook_col], Piece) or self.board[king_row][rook_col].piece_type != PieceType.ROOK:
+            return False
+        
+        # Check if squares between are empty
+        for col in range(rook_col + 1, king_col):
+            if self.board[king_row][col] is not None:
+                return False
+        
+        # Check if king is in check or passes through check
+        if self._is_square_attacked(king_row, king_col, color):
+            return False
+        if self._is_square_attacked(king_row, king_col - 1, color):
+            return False
+        
+        return True
+    
+    def _is_square_attacked(self, row: int, col: int, color: Color) -> bool:
+        """Check if a square is attacked by opponent pieces."""
+        opponent_color = Color.BLACK if color == Color.WHITE else Color.WHITE
+        
+        for r in range(8):
+            for c in range(8):
+                piece = self.board[r][c]
+                if piece and piece.color == opponent_color:
+                    moves = self._get_pseudo_legal_moves(r, c)
+                    if (row, col) in moves:
+                        return True
+        
+        return False
+    
+    def _is_legal_move(self, from_row: int, from_col: int, to_row: int, to_col: int) -> bool:
+        """Check if a move is legal (doesn't leave king in check)."""
+        piece = self.board[from_row][from_col]
+        if not piece:
+            return False
+        
+        # Make the move temporarily
+        target_piece = self.board[to_row][to_col]
+        self.board[to_row][to_col] = piece
+        self.board[from_row][from_col] = None
+        
+        # Update king position if needed
+        if piece.piece_type == PieceType.KING:
+            if piece.color == Color.WHITE:
+                king_pos = (to_row, to_col)
+            else:
+                king_pos = (to_row, to_col)
+        else:
+            king_pos = self.white_king_pos if piece.color == Color.WHITE else self.black_king_pos
+        
+        # Check if king is in check
+        in_check = self._is_square_attacked(king_pos[0], king_pos[1], piece.color)
+        
+        # Undo the move
+        self.board[from_row][from_col] = piece
+        self.board[to_row][to_col] = target_piece
+        
+        return not in_check
+    
+    def move_piece(self, from_pos: str, to_pos: str) -> bool:
+        """Move a piece from one position to another."""
+        from_row, from_col = self.pos_to_coords(from_pos)
+        to_row, to_col = self.pos_to_coords(to_pos)
+        
+        piece = self.board[from_row][from_col]
+        if not piece:
+            return False
+        
+        # Check if move is legal
+        legal_moves = self.get_legal_moves(from_row, from_col)
+        if (to_row, to_col) not in legal_moves:
+            return False
+        
+        # Handle en passant
+        if piece.piece_type == PieceType.PAWN and (to_row, to_col) == self.en_passant_target:
+            capture_row = from_row
+            self.board[capture_row][to_col] = None
+        
+        # Handle castling
+        if piece.piece_type == PieceType.KING:
+            if piece.color == Color.WHITE:
+                if from_col == 4 and to_col == 6:  # Kingside
+                    self.board[7][7] = None
+                    self.board[7][5] = Piece(PieceType.ROOK, Color.WHITE)
+                elif from_col == 4 and to_col == 2:  # Queenside
+                    self.board[7][0] = None
+                    self.board[7][3] = Piece(PieceType.ROOK, Color.WHITE)
+                self.white_king_pos = (to_row, to_col)
+                self.white_castling_kingside = False
+                self.white_castling_queenside = False
+            else:
+                if from_col == 4 and to_col == 6:  # Kingside
+                    self.board[0][7] = None
+                    self.board[0][5] = Piece(PieceType.ROOK, Color.BLACK)
+                elif from_col == 4 and to_col == 2:  # Queenside
+                    self.board[0][0] = None
+                    self.board[0][3] = Piece(PieceType.ROOK, Color.BLACK)
+                self.black_king_pos = (to_row, to_col)
+                self.black_castling_kingside = False
+                self.black_castling_queenside = False
+        
+        # Disable castling if rook moves
+        if piece.piece_type == PieceType.ROOK:
+            if piece.color == Color.WHITE:
+                if from_col == 0:
+                    self.white_castling_queenside = False
+                elif from_col == 7:
+                    self.white_castling_kingside = False
+            else:
+                if from_col == 0:
+                    self.black_castling_queenside = False
+                elif from_col == 7:
+                    self.black_castling_kingside = False
+        
+        # Handle pawn promotion
+        if piece.piece_type == PieceType.PAWN:
+            if (piece.color == Color.WHITE and to_row == 0) or (piece.color == Color.BLACK and to_row == 7):
+                promotion_piece = input("Promote to (Q/R/B/N): ").upper()
+                promotion_map = {'Q': PieceType.QUEEN, 'R': PieceType.ROOK, 'B': PieceType.BISHOP, 'N': PieceType.KNIGHT}
+                piece.piece_type = promotion_map.get(promotion_piece, PieceType.QUEEN)
+            
+            # Handle en passant capture
+            if abs(to_row - from_row) == 2:
+                self.en_passant_target = (from_row + (to_row - from_row) // 2, from_col)
+            else:
+                self.en_passant_target = None
+        else:
+            self.en_passant_target = None
+        
+        # Move the piece
+        self.board[to_row][to_col] = piece
+        self.board[from_row][from_col] = None
+        
+        return True
+    
+    def is_in_check(self, color: Color) -> bool:
+        """Check if a color is in check."""
+        king_pos = self.white_king_pos if color == Color.WHITE else self.black_king_pos
+        return self._is_square_attacked(king_pos[0], king_pos[1], color)
+    
+    def is_checkmate(self, color: Color) -> bool:
+        """Check if a color is in checkmate."""
+        if not self.is_in_check(color):
+            return False
+        
+        # Check if any legal move exists
+        for row in range(8):
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece and piece.color == color:
+                    if self.get_legal_moves(row, col):
+                        return False
+        
+        return True
+    
+    def is_stalemate(self, color: Color) -> bool:
+        """Check if a color is in stalemate."""
+        if self.is_in_check(color):
+            return False
+        
+        # Check if any legal move exists
+        for row in range(8):
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece and piece.color == color:
+                    if self.get_legal_moves(row, col):
+                        return False
+        
+        return True
+
+class ChessGame:
+    def __init__(self):
+        self.board = ChessBoard()
+        self.current_player = Color.WHITE
+        self.game_over = False
+        self.winner = None
+    
+    def switch_player(self):
+        """Switch to the next player."""
+        self.current_player = Color.BLACK if self.current_player == Color.WHITE else Color.WHITE
+    
+    def play(self):
+        """Main game loop."""
+        print("Welcome to Chess!")
+        print("Enter moves in algebraic notation (e.g., e2 e4)")
+        print("Type 'quit' to exit\n")
+        
+        while not self.game_over:
+            self.board.display()
+            
+            player_name = "White" if self.current_player == Color.WHITE else "Black"
+            print(f"{player_name}'s turn")
+            
+            if self.board.is_in_check(self.current_player):
+                print("You are in check!")
+            
+            while True:
+                user_input = input("Enter move (from to): ").strip().lower()
+                
+                if user_input == 'quit':
+                    self.game_over = True
+                    print("Game ended.")
+                    return
+                
+                try:
+                    parts = user_input.split()
+                    if len(parts) != 2:
+                        print("Invalid input. Please enter two positions (e.g., e2 e4)")
+                        continue
+                    
+                    from_pos, to_pos = parts
+                    
+                    # Validate positions
+                    if not (len(from_pos) == 2 and len(to_pos) == 2):
+                        print("Invalid position format.")
+                        continue
+                    
+                    if self.board.move_piece(from_pos, to_pos):
+                        break
+                    else:
+                        print("Invalid move. Please try again.")
+                except Exception as e:
+                    print(f"Error: {e}")
+                    continue
+            
+            # Check game status
+            self.switch_player()
+            
+            if self.board.is_checkmate(self.current_player):
+                self.board.display()
+                opponent = "White" if self.current_player == Color.BLACK else "Black"
+                print(f"Checkmate! {opponent} wins!")
+                self.game_over = True
+            elif self.board.is_stalemate(self.current_player):
+                self.board.display()
+                print("Stalemate! Game is a draw.")
+                self.game_over = True
+            elif self.board.is_in_check(self.current_player):
+                pass  # Will display on next iteration
+
+if __name__ == "__main__":
+    game = ChessGame()
+    game.play()
